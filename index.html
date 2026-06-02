@@ -1,0 +1,1977 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com;
+  font-src https://fonts.gstatic.com;
+  connect-src https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://api.allorigins.win;
+  img-src 'self' data: blob:;
+  worker-src blob:;
+">
+<title>MeltItDown — File to Markdown Converter</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='4' fill='%231a1a1a'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' font-family='monospace' font-weight='900' font-size='18' fill='%23e8640c'%3EM%3C/text%3E%3Crect x='4' y='26' width='24' height='2' rx='1' fill='%23e8640c' opacity='0.6'/%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700;800;900&family=Roboto+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+/* ═══════════════════════════════════════════════
+   DESIGN DIRECTION: Industrial Terminal
+   Dark anthracite base, amber accent, mono type
+   Inspired by professional security tools
+═══════════════════════════════════════════════ */
+:root {
+  --bg:        #0b0b0b;
+  --surface:   #141414;
+  --surface2:  #1c1c1c;
+  --surface3:  #242424;
+  --border:    #2a2a2a;
+  --border2:   #363636;
+  --amber:     #e8640c;
+  --amber-dim: rgba(232,100,12,0.12);
+  --amber-glow:rgba(232,100,12,0.28);
+  --green:     #3dd68c;
+  --green-dim: rgba(61,214,140,0.1);
+  --red:       #ff5f5f;
+  --red-dim:   rgba(255,95,95,0.1);
+  --blue:      #58a6ff;
+  --blue-dim:  rgba(88,166,255,0.1);
+  --text:      #e2e2e2;
+  --text2:     #999;
+  --text3:     #555;
+  --ff-display:'Barlow', sans-serif;
+  --ff-mono:   'Roboto Mono', monospace;
+  --radius:    3px;
+}
+
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ff-display);
+  min-height: 100vh;
+  overflow-x: hidden;
+  cursor: default;
+}
+
+/* Scanline texture overlay */
+body::after {
+  content:'';
+  position:fixed; inset:0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.05) 4px
+  );
+  pointer-events:none;
+  z-index:9999;
+}
+
+/* Ambient glow top-left */
+body::before {
+  content:'';
+  position:fixed;
+  top:-200px; left:-200px;
+  width:600px; height:600px;
+  background: radial-gradient(circle, rgba(232,100,12,0.04) 0%, transparent 70%);
+  pointer-events:none;
+  z-index:0;
+}
+
+/* ── SCROLLBAR ────────────────────────────── */
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+
+/* ── LAYOUT ───────────────────────────────── */
+.app-shell {
+  position:relative; z-index:1;
+  display:grid;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+}
+
+/* ── TOPBAR ───────────────────────────────── */
+.topbar {
+  border-bottom: 1px solid var(--border);
+  padding: 0 28px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(18,18,18,0.97);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  box-shadow: 0 1px 0 rgba(232,100,12,0.08);
+}
+
+.logo {
+  display:flex; align-items:center; gap:10px;
+}
+
+.logo-mark {
+  font-size:18px; font-weight:900;
+  letter-spacing:1px;
+  text-transform:uppercase;
+  color: var(--text);
+}
+
+.logo-mark em {
+  font-style:normal;
+  color: var(--amber);
+  letter-spacing:2px;
+}
+
+.logo-version {
+  font-family: var(--ff-mono);
+  font-size:10px;
+  color: var(--text3);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border-radius: var(--radius);
+}
+
+.topbar-right {
+  display:flex; align-items:center; gap:10px;
+}
+
+/* Security badge */
+.sec-badge {
+  display:flex; align-items:center; gap:6px;
+  font-family: var(--ff-mono);
+  font-size:10px;
+  color: var(--green);
+  border: 1px solid rgba(61,214,140,0.25);
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  letter-spacing:0.5px;
+}
+
+.sec-dot {
+  width:6px; height:6px;
+  border-radius:50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%,100% { opacity:1; }
+  50% { opacity:0.4; }
+}
+
+/* Config button */
+.config-btn {
+  display:flex; align-items:center; gap:6px;
+  font-family: var(--ff-mono);
+  font-size:10px;
+  letter-spacing:1px;
+  text-transform:uppercase;
+  padding: 6px 12px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text2);
+  cursor:pointer;
+  transition: all 0.15s;
+}
+
+.config-btn:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: var(--amber-dim);
+}
+
+.config-btn .dot {
+  width:6px; height:6px; border-radius:50%;
+  background: var(--text3);
+  transition: background 0.15s;
+}
+
+.config-btn.configured .dot { background: var(--green); box-shadow: 0 0 4px var(--green); }
+.config-btn.configured { border-color: rgba(61,214,140,0.3); color: var(--green); }
+
+/* ── SECURITY BANNER ──────────────────────── */
+.sec-banner {
+  background: rgba(232,100,12,0.07);
+  border-bottom: 1px solid rgba(232,100,12,0.2);
+  padding: 10px 28px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  font-family: var(--ff-mono);
+  font-size:11px;
+  color: var(--amber);
+  line-height: 1.5;
+}
+
+.sec-banner-icon { font-size:14px; flex-shrink:0; }
+
+.sec-banner-close {
+  margin-left:auto;
+  background:none; border:none;
+  color: var(--amber); cursor:pointer;
+  font-size:16px; opacity:0.6;
+  transition:opacity 0.15s;
+  flex-shrink:0;
+}
+
+.sec-banner-close:hover { opacity:1; }
+
+/* ── MAIN CONTENT ─────────────────────────── */
+.main-content {
+  display:grid;
+  grid-template-columns: 400px 1fr;
+  gap:0;
+  height: calc(100vh - 56px);
+  overflow:hidden;
+}
+
+/* ── LEFT PANEL ───────────────────────────── */
+.left-panel {
+  border-right: 1px solid var(--border);
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+
+.panel-section {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.section-header {
+  font-family: var(--ff-mono);
+  font-size:10px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color: var(--text3);
+  margin-bottom:14px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.section-header::after {
+  content:'';
+  flex:1;
+  height:1px;
+  background: var(--border);
+}
+
+/* Drop zone */
+.drop-zone {
+  border: 1px dashed var(--border2);
+  border-radius: var(--radius);
+  padding: 32px 20px;
+  text-align:center;
+  cursor:pointer;
+  transition: all 0.2s;
+  background: var(--surface);
+  position:relative;
+  overflow:hidden;
+  user-select:none;
+}
+
+.drop-zone::before {
+  content:'';
+  position:absolute; inset:0;
+  background: linear-gradient(135deg, var(--amber-dim), transparent 60%);
+  opacity:0;
+  transition:opacity 0.2s;
+}
+
+.drop-zone:hover,
+.drop-zone.drag-over {
+  border-color: var(--amber);
+  border-style: solid;
+}
+
+.drop-zone:hover::before,
+.drop-zone.drag-over::before { opacity:1; }
+
+.drop-zone.drag-over {
+  transform:scale(1.01);
+  box-shadow: 0 0 24px var(--amber-glow);
+}
+
+.drop-icon-wrap {
+  width:48px; height:48px;
+  margin: 0 auto 14px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  display:flex; align-items:center; justify-content:center;
+  font-size:20px;
+  position:relative; z-index:1;
+  transition: all 0.2s;
+}
+
+.drop-zone:hover .drop-icon-wrap {
+  border-color: var(--amber);
+  box-shadow: 0 0 12px var(--amber-dim);
+}
+
+.drop-title {
+  font-size:14px; font-weight:600;
+  margin-bottom:6px;
+  position:relative; z-index:1;
+}
+
+.drop-sub {
+  font-family: var(--ff-mono);
+  font-size:10px;
+  color: var(--text3);
+  line-height:1.8;
+  position:relative; z-index:1;
+}
+
+.drop-sub strong { color: var(--amber); font-weight:500; }
+
+#fileInput { display:none; }
+
+/* Privacy note under dropzone */
+.privacy-note {
+  display:flex; align-items:flex-start; gap:8px;
+  margin-top:10px;
+  padding: 10px 12px;
+  background: var(--green-dim);
+  border: 1px solid rgba(61,214,140,0.15);
+  border-radius: var(--radius);
+  font-family: var(--ff-mono);
+  font-size:10px;
+  color: var(--green);
+  line-height:1.6;
+}
+
+/* File queue */
+.queue-wrap {
+  flex:1;
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+}
+
+.queue-header {
+  padding:12px 20px;
+  border-bottom:1px solid var(--border);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-shrink:0;
+}
+
+.queue-count {
+  font-family: var(--ff-mono);
+  font-size:10px;
+  color: var(--text3);
+  letter-spacing:1px;
+}
+
+.queue-count span { color: var(--amber); }
+
+.queue-list {
+  flex:1;
+  overflow-y:auto;
+}
+
+.queue-empty {
+  padding:32px 20px;
+  text-align:center;
+  font-family: var(--ff-mono);
+  font-size:11px;
+  color: var(--text3);
+  line-height:1.8;
+}
+
+.queue-item {
+  display:flex; align-items:center; gap:10px;
+  padding:10px 20px;
+  border-bottom:1px solid rgba(46,46,46,0.5);
+  transition:background 0.1s;
+  animation: slideIn 0.18s ease;
+}
+
+@keyframes slideIn {
+  from { opacity:0; transform:translateX(-6px); }
+  to   { opacity:1; transform:translateX(0); }
+}
+
+.queue-item:hover { background: var(--surface2); }
+
+.q-icon {
+  width:30px; height:30px;
+  border-radius:var(--radius);
+  display:flex; align-items:center; justify-content:center;
+  font-size:13px; flex-shrink:0;
+}
+
+.q-icon-pdf  { background:rgba(255,95,95,0.12); }
+.q-icon-docx { background:rgba(88,166,255,0.12); }
+.q-icon-xlsx { background:rgba(61,214,140,0.12); }
+.q-icon-img  { background:rgba(232,100,12,0.12); }
+.q-icon-html { background:rgba(167,107,255,0.12); }
+.q-icon-txt  { background:rgba(153,153,153,0.1); }
+
+.q-info { flex:1; min-width:0; }
+
+.q-name {
+  font-size:12px; font-weight:500;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  margin-bottom:2px;
+}
+
+.q-meta {
+  font-family:var(--ff-mono);
+  font-size:9px; color:var(--text3);
+}
+
+.q-status {
+  font-family:var(--ff-mono);
+  font-size:9px; letter-spacing:0.5px;
+  padding:2px 7px; border-radius:var(--radius);
+  flex-shrink:0;
+}
+
+.qs-pending    { background:rgba(85,85,85,0.2); color:var(--text3); }
+.qs-processing { background:var(--blue-dim); color:var(--blue); }
+.qs-done       { background:var(--green-dim); color:var(--green); }
+.qs-error      { background:var(--red-dim); color:var(--red); }
+
+/* Bottom action bar */
+.action-bar {
+  padding:16px 20px;
+  border-top:1px solid var(--border);
+  background: var(--surface);
+  flex-shrink:0;
+}
+
+.progress-track {
+  height:2px;
+  background: var(--border);
+  border-radius:1px;
+  margin-bottom:12px;
+  overflow:hidden;
+  display:none;
+}
+
+.progress-fill {
+  height:100%;
+  background: linear-gradient(90deg, #e8640c, #ff9a45);
+  width:0%;
+  transition:width 0.3s ease;
+  border-radius:1px;
+}
+
+.action-row {
+  display:flex; gap:8px;
+}
+
+/* ── BUTTONS ──────────────────────────────── */
+.btn {
+  font-family:var(--ff-display);
+  font-size:12px; font-weight:600;
+  padding:9px 16px;
+  border:none; border-radius:var(--radius);
+  cursor:pointer;
+  transition:all 0.15s;
+  letter-spacing:0.3px;
+  display:flex; align-items:center; gap:6px;
+  white-space:nowrap;
+}
+
+.btn-amber {
+  background: var(--amber);
+  color: #0e0e0e;
+  flex:1;
+}
+
+.btn-amber:hover:not(:disabled) {
+  background:#ff7a28;
+  box-shadow:0 0 16px var(--amber-glow);
+  transform:translateY(-1px);
+}
+
+.btn-ghost {
+  background:transparent;
+  color:var(--text2);
+  border:1px solid var(--border2);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  border-color:var(--red);
+  color:var(--red);
+  background:var(--red-dim);
+}
+
+.btn:disabled {
+  opacity:0.35; cursor:not-allowed;
+  transform:none !important;
+  box-shadow:none !important;
+}
+
+/* Spinner */
+.spin {
+  display:inline-block;
+  width:11px; height:11px;
+  border:2px solid rgba(14,14,14,0.3);
+  border-top-color:#0e0e0e;
+  border-radius:50%;
+  animation:spin 0.6s linear infinite;
+}
+
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ── RIGHT PANEL ──────────────────────────── */
+.right-panel {
+  display:flex; flex-direction:column;
+  overflow:hidden;
+  background: var(--surface);
+}
+
+.output-topbar {
+  padding:0 20px;
+  height:48px;
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; justify-content:space-between;
+  flex-shrink:0;
+  background:var(--surface2);
+}
+
+.output-label {
+  font-family:var(--ff-mono);
+  font-size:10px; letter-spacing:2px; text-transform:uppercase;
+  color:var(--text3);
+}
+
+.output-actions {
+  display:flex; gap:6px;
+}
+
+.btn-sm {
+  font-family:var(--ff-mono);
+  font-size:10px; letter-spacing:0.5px;
+  padding:5px 12px;
+  border-radius:var(--radius);
+  cursor:pointer;
+  transition:all 0.15s;
+  border:1px solid var(--border2);
+  background:transparent;
+  color:var(--text2);
+}
+
+.btn-sm:hover:not(:disabled) { border-color:var(--amber); color:var(--amber); }
+.btn-sm.primary {
+  background:var(--amber); color:#0e0e0e;
+  border-color:var(--amber); font-weight:600;
+}
+.btn-sm.primary:hover { background:#ff7a28; }
+.btn-sm:disabled { opacity:0.3; cursor:not-allowed; }
+
+/* Format selector */
+.format-row {
+  display:flex; gap:4px;
+}
+
+.fmt-btn {
+  font-family:var(--ff-mono);
+  font-size:9px; letter-spacing:1px; text-transform:uppercase;
+  padding:4px 9px;
+  border-radius:var(--radius);
+  border:1px solid var(--border);
+  background:transparent;
+  color:var(--text3);
+  cursor:pointer;
+  transition:all 0.15s;
+}
+
+.fmt-btn.active, .fmt-btn:hover {
+  border-color:var(--amber);
+  color:var(--amber);
+  background:var(--amber-dim);
+}
+
+/* Output area */
+.output-area {
+  flex:1; overflow-y:auto;
+  padding:24px;
+}
+
+.output-empty {
+  height:100%;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  gap:14px;
+  color:var(--text3);
+}
+
+.output-empty-icon {
+  font-size:48px; opacity:0.15;
+}
+
+.output-empty-text {
+  font-family:var(--ff-mono);
+  font-size:11px; text-align:center; line-height:2;
+}
+
+#mdOutput {
+  font-family:var(--ff-mono);
+  font-size:12px; line-height:1.9;
+  color:#c5c5c5;
+  white-space:pre-wrap;
+  word-break:break-word;
+  display:none;
+}
+
+/* ═══════════════════════════════════════════
+   MODALS
+═══════════════════════════════════════════ */
+.modal-overlay {
+  position:fixed; inset:0;
+  background:rgba(0,0,0,0.85);
+  backdrop-filter:blur(4px);
+  z-index:1000;
+  display:flex; align-items:center; justify-content:center;
+  padding:20px;
+  opacity:0;
+  transition:opacity 0.2s;
+  pointer-events:none;
+}
+
+.modal-overlay.open {
+  opacity:1;
+  pointer-events:all;
+}
+
+.modal {
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:4px;
+  width:100%;
+  max-width:540px;
+  max-height:90vh;
+  overflow-y:auto;
+  transform:translateY(16px);
+  transition:transform 0.2s;
+  box-shadow:0 24px 80px rgba(0,0,0,0.6);
+}
+
+.modal-overlay.open .modal { transform:translateY(0); }
+
+.modal-header {
+  padding:20px 24px 0;
+  display:flex; align-items:flex-start; justify-content:space-between;
+}
+
+.modal-title {
+  font-size:16px; font-weight:700;
+  letter-spacing:-0.3px;
+}
+
+.modal-sub {
+  font-family:var(--ff-mono);
+  font-size:10px; color:var(--text3);
+  margin-top:4px;
+}
+
+.modal-close {
+  background:none; border:none;
+  color:var(--text3); font-size:20px;
+  cursor:pointer; line-height:1;
+  transition:color 0.15s;
+  flex-shrink:0;
+}
+
+.modal-close:hover { color:var(--text); }
+
+.modal-body { padding:20px 24px; }
+
+.modal-footer {
+  padding:16px 24px 20px;
+  border-top:1px solid var(--border);
+  display:flex; justify-content:flex-end; gap:8px;
+}
+
+/* Provider cards */
+.provider-grid {
+  display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;
+  margin-bottom:20px;
+}
+
+.provider-card {
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:14px 10px;
+  text-align:center;
+  cursor:pointer;
+  transition:all 0.15s;
+  background:var(--surface2);
+}
+
+.provider-card:hover {
+  border-color:var(--amber);
+  background:var(--amber-dim);
+}
+
+.provider-card.selected {
+  border-color:var(--amber);
+  background:var(--amber-dim);
+  box-shadow:0 0 12px var(--amber-glow);
+}
+
+.provider-logo { font-size:24px; margin-bottom:6px; }
+
+.provider-name {
+  font-size:11px; font-weight:600;
+  margin-bottom:3px;
+}
+
+.provider-model {
+  font-family:var(--ff-mono);
+  font-size:9px; color:var(--text3);
+}
+
+/* Key input section */
+.key-section { display:none; }
+.key-section.visible { display:block; }
+
+.key-label {
+  font-family:var(--ff-mono);
+  font-size:10px; letter-spacing:1px; text-transform:uppercase;
+  color:var(--text3); margin-bottom:8px;
+}
+
+.key-input-row {
+  display:flex; gap:8px; margin-bottom:8px;
+}
+
+.key-input {
+  flex:1;
+  background:var(--surface2);
+  border:1px solid var(--border2);
+  border-radius:var(--radius);
+  padding:10px 14px;
+  color:var(--text);
+  font-family:var(--ff-mono);
+  font-size:12px;
+  outline:none;
+  transition:border-color 0.2s;
+}
+
+.key-input:focus { border-color:var(--amber); }
+.key-input::placeholder { color:var(--text3); }
+
+.key-toggle {
+  padding:0 12px;
+  background:var(--surface2);
+  border:1px solid var(--border2);
+  border-radius:var(--radius);
+  color:var(--text2);
+  cursor:pointer;
+  font-size:14px;
+  transition:border-color 0.15s;
+}
+
+.key-toggle:hover { border-color:var(--amber); }
+
+/* Remember checkbox */
+.remember-row {
+  display:flex; align-items:flex-start; gap:8px;
+  margin-top:10px;
+  padding:10px 12px;
+  background:var(--red-dim);
+  border:1px solid rgba(255,95,95,0.15);
+  border-radius:var(--radius);
+}
+
+.remember-row input[type=checkbox] {
+  margin-top:2px; flex-shrink:0;
+  accent-color:var(--amber);
+}
+
+.remember-text {
+  font-family:var(--ff-mono);
+  font-size:10px; color:var(--red);
+  line-height:1.6;
+}
+
+/* Key guide */
+.key-guide {
+  margin-top:14px;
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  overflow:hidden;
+}
+
+.key-guide-header {
+  padding:10px 14px;
+  background:var(--surface2);
+  font-family:var(--ff-mono);
+  font-size:10px; letter-spacing:1px; text-transform:uppercase;
+  color:var(--text3);
+  cursor:pointer;
+  display:flex; align-items:center; justify-content:space-between;
+  transition:color 0.15s;
+}
+
+.key-guide-header:hover { color:var(--amber); }
+
+.key-guide-body {
+  padding:14px;
+  display:none;
+  background:var(--surface);
+}
+
+.key-guide-body.open { display:block; }
+
+.guide-step {
+  display:flex; gap:10px; margin-bottom:10px;
+  font-size:12px; line-height:1.6; color:var(--text2);
+}
+
+.guide-step:last-child { margin-bottom:0; }
+
+.step-num {
+  font-family:var(--ff-mono);
+  font-size:10px; color:var(--amber);
+  background:var(--amber-dim);
+  border:1px solid rgba(232,100,12,0.2);
+  width:20px; height:20px;
+  border-radius:var(--radius);
+  display:flex; align-items:center; justify-content:center;
+  flex-shrink:0; margin-top:2px;
+}
+
+.guide-link {
+  color:var(--blue);
+  text-decoration:none;
+  font-family:var(--ff-mono);
+  font-size:11px;
+}
+
+.guide-link:hover { text-decoration:underline; }
+
+/* Security info panel in modal */
+.sec-info {
+  display:flex; align-items:flex-start; gap:10px;
+  padding:12px 14px;
+  background:var(--green-dim);
+  border:1px solid rgba(61,214,140,0.15);
+  border-radius:var(--radius);
+  margin-bottom:16px;
+}
+
+.sec-info-icon { font-size:16px; flex-shrink:0; }
+
+.sec-info-text {
+  font-family:var(--ff-mono);
+  font-size:10px; color:var(--green);
+  line-height:1.7;
+}
+
+/* Validation indicator */
+.key-validation {
+  font-family:var(--ff-mono);
+  font-size:10px;
+  margin-top:6px;
+  min-height:16px;
+  transition:all 0.2s;
+}
+
+.kv-ok    { color:var(--green); }
+.kv-err   { color:var(--red); }
+.kv-check { color:var(--amber); }
+
+/* ── TOAST ────────────────────────────────── */
+.toast {
+  position:fixed;
+  bottom:24px; right:24px;
+  background:var(--surface2);
+  border:1px solid var(--border2);
+  border-radius:var(--radius);
+  padding:10px 16px;
+  font-family:var(--ff-mono);
+  font-size:11px;
+  z-index:2000;
+  transform:translateY(60px);
+  opacity:0;
+  transition:all 0.22s ease;
+  max-width:320px;
+  display:flex; align-items:center; gap:8px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4);
+}
+
+.toast.show   { transform:translateY(0); opacity:1; }
+.toast.t-ok   { border-color:rgba(61,214,140,0.4); color:var(--green); }
+.toast.t-err  { border-color:rgba(255,95,95,0.4); color:var(--red); }
+.toast.t-warn { border-color:rgba(232,100,12,0.4); color:var(--amber); }
+
+/* ── SESSION WARNING MODAL ────────────────── */
+.session-modal {
+  max-width:420px;
+}
+
+.session-modal .modal-body {
+  text-align:center;
+  padding:24px;
+}
+
+.session-icon { font-size:40px; margin-bottom:14px; }
+
+.session-title {
+  font-size:16px; font-weight:700;
+  margin-bottom:8px;
+}
+
+.session-text {
+  font-family:var(--ff-mono);
+  font-size:11px; color:var(--text2);
+  line-height:1.8;
+}
+
+.session-text strong { color:var(--amber); }
+
+/* ── RESPONSIVE ───────────────────────────── */
+@media (max-width: 768px) {
+  .main-content { grid-template-columns:1fr; }
+  .left-panel { height:auto; overflow:visible; }
+  .right-panel { height:60vh; }
+  .provider-grid { grid-template-columns:1fr 1fr; }
+}
+
+/* ── PAGE LOAD ANIMATION ──────────────────── */
+.app-shell { animation:fadeUp 0.4s ease both; }
+
+@keyframes fadeUp {
+  from { opacity:0; transform:translateY(8px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+</style>
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="logo">
+      <div class="logo-mark">Melt<em>It</em>Down</div>
+      <div class="logo-version">v1.0</div>
+    </div>
+    <div class="topbar-right">
+      <div class="sec-badge">
+        <div class="sec-dot"></div>
+        LOCAL · SECURE
+      </div>
+      <button class="config-btn" id="configBtn" onclick="openConfig()">
+        <div class="dot" id="configDot"></div>
+        AI PROVIDER
+      </button>
+    </div>
+  </header>
+
+  <!-- SECURITY BANNER -->
+  <div class="sec-banner" id="secBanner">
+    <span class="sec-banner-icon">⚠</span>
+    <span>
+      <strong>Security reminder:</strong>
+      Your files are processed locally in your browser — nothing is uploaded to any server.
+      API keys are stored only in your current session.
+      <strong>When you finish, close this tab or press F5 to clear all data.</strong>
+    </span>
+    <button class="sec-banner-close" onclick="document.getElementById('secBanner').remove()">×</button>
+  </div>
+
+  <!-- MAIN -->
+  <div class="main-content">
+
+    <!-- LEFT PANEL -->
+    <div class="left-panel">
+
+      <!-- DROP ZONE -->
+      <div class="panel-section">
+        <div class="section-header">Input</div>
+
+        <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+          <div class="drop-icon-wrap">⬆</div>
+          <div class="drop-title">Drop files or click to browse</div>
+          <div class="drop-sub">
+            <strong>PDF</strong> · <strong>DOCX</strong> · <strong>XLSX/CSV</strong> ·
+            <strong>JPG/PNG/WEBP</strong> · <strong>HTML/TXT</strong><br>
+            Multiple files · Max 20MB each
+          </div>
+          <input type="file" id="fileInput" multiple
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.png,.webp,.gif,.html,.htm,.txt,.md">
+        </div>
+
+        <div class="privacy-note">
+          <span>🔒</span>
+          <span>Files never leave your device. Processing happens entirely in your browser memory and is discarded when you close or refresh this tab.</span>
+        </div>
+      </div>
+
+      <!-- QUEUE -->
+      <div class="queue-wrap">
+        <div class="queue-header">
+          <span class="queue-count">FILES <span id="queueCount">0</span></span>
+          <button class="btn btn-ghost" onclick="clearQueue()"
+            style="padding:4px 10px;font-size:10px;font-family:var(--ff-mono)">CLEAR</button>
+        </div>
+        <div class="queue-list" id="queueList">
+          <div class="queue-empty" id="queueEmpty">
+            No files yet.<br>
+            Add files above to begin.
+          </div>
+        </div>
+      </div>
+
+      <!-- ACTION BAR -->
+      <div class="action-bar">
+        <div class="progress-track" id="progressTrack">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="action-row">
+          <button class="btn btn-ghost" onclick="clearQueue()">✕ Clear</button>
+          <button class="btn btn-amber" id="convertBtn" onclick="startConvert()">
+            Convert →
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- RIGHT PANEL -->
+    <div class="right-panel">
+      <div class="output-topbar">
+        <span class="output-label">Output — Markdown</span>
+        <div class="output-actions">
+          <div class="format-row">
+            <button class="fmt-btn active" id="fmt-md"  onclick="setFormat('md')">MD</button>
+            <button class="fmt-btn"        id="fmt-txt" onclick="setFormat('txt')">TXT</button>
+            <button class="fmt-btn"        id="fmt-html" onclick="setFormat('html')">HTML</button>
+          </div>
+          <button class="btn-sm" id="copyBtn" onclick="copyOutput()" disabled>Copy</button>
+          <button class="btn-sm primary" id="downloadBtn" onclick="downloadOutput()" disabled>Download</button>
+        </div>
+      </div>
+
+      <div class="output-area">
+        <div class="output-empty" id="outputEmpty">
+          <div class="output-empty-icon">◻</div>
+          <div class="output-empty-text">
+            Output will appear here after conversion.<br>
+            All files will be combined into a single document.
+          </div>
+        </div>
+        <pre id="mdOutput"></pre>
+      </div>
+    </div>
+
+  </div><!-- /main-content -->
+</div><!-- /app-shell -->
+
+<!-- ═══════════════════════════════════════
+     MODAL: AI PROVIDER CONFIG
+═══════════════════════════════════════ -->
+<div class="modal-overlay" id="configModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">AI Provider Configuration</div>
+        <div class="modal-sub">Required only for image files (JPG, PNG, WEBP). All other formats convert locally.</div>
+      </div>
+      <button class="modal-close" onclick="closeConfig()">×</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Security info -->
+      <div class="sec-info">
+        <span class="sec-info-icon">🔐</span>
+        <span class="sec-info-text">
+          Your API key is stored only in <strong>session memory</strong> and deleted when you close or refresh this tab.
+          It is sent directly to your chosen provider — never to any third-party server.
+          If you enable "Remember key", it will persist in localStorage on this device only.
+        </span>
+      </div>
+
+      <!-- Provider selector -->
+      <div class="section-header" style="margin-bottom:12px">Select Provider</div>
+      <div class="provider-grid">
+        <div class="provider-card" id="pcard-anthropic" onclick="selectProvider('anthropic')">
+          <div class="provider-logo">🟠</div>
+          <div class="provider-name">Anthropic</div>
+          <div class="provider-model">claude-sonnet-4</div>
+        </div>
+        <div class="provider-card" id="pcard-openai" onclick="selectProvider('openai')">
+          <div class="provider-logo">🟢</div>
+          <div class="provider-name">OpenAI</div>
+          <div class="provider-model">gpt-4o-mini</div>
+        </div>
+        <div class="provider-card" id="pcard-gemini" onclick="selectProvider('gemini')">
+          <div class="provider-logo">🔵</div>
+          <div class="provider-name">Google</div>
+          <div class="provider-model">gemini-1.5-flash</div>
+        </div>
+      </div>
+
+      <!-- Key input -->
+      <div class="key-section" id="keySection">
+        <div class="key-label" id="keyLabel">API KEY</div>
+        <div class="key-input-row">
+          <input type="password" class="key-input" id="keyInput"
+            placeholder="Paste your API key here"
+            oninput="onKeyInput()">
+          <button class="key-toggle" id="keyToggle" onclick="toggleKeyVisibility()">👁</button>
+        </div>
+        <div class="key-validation" id="keyValidation"></div>
+
+        <!-- Remember warning -->
+        <div class="remember-row">
+          <input type="checkbox" id="rememberKey" onchange="onRememberChange()">
+          <div class="remember-text">
+            <strong>⚠ Remember key on this device</strong> — stores in localStorage (persists after tab close).
+            Only enable on a private, trusted device. Never enable on shared computers.
+          </div>
+        </div>
+
+        <!-- How to get key guide -->
+        <div class="key-guide" id="keyGuide">
+          <div class="key-guide-header" onclick="toggleGuide()">
+            <span>How to get your API key</span>
+            <span id="guideArrow">▼</span>
+          </div>
+          <div class="key-guide-body" id="guideBody">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeConfig()">Cancel</button>
+      <button class="btn btn-amber" id="saveConfigBtn" onclick="saveConfig()" disabled>Save Configuration</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════
+     MODAL: SESSION WARNING (on load)
+═══════════════════════════════════════ -->
+<div class="modal-overlay" id="sessionModal">
+  <div class="modal session-modal">
+    <div class="modal-body">
+      <div class="session-icon">🔐</div>
+      <div class="session-title">Your Privacy is Protected</div>
+      <div class="session-text">
+        <strong>Files you upload</strong> are processed entirely in your browser.<br>
+        They are never sent to any server.<br><br>
+        <strong>API keys</strong> are stored only in session memory<br>
+        and deleted when you close this tab.<br><br>
+        ⚠ <strong>When you finish using this app,<br>
+        close the tab or press F5 to clear all data.</strong>
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content:center">
+      <button class="btn btn-amber" onclick="closeSessionModal()" style="min-width:160px">
+        I Understand — Continue
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- ═══════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════ -->
+<script>
+'use strict';
+
+// ── PDF.js worker ────────────────────────────────────────────────────────────
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// ── App State ────────────────────────────────────────────────────────────────
+// Keys stored only in sessionStorage by default.
+// NEVER stored in JS global scope as plain text after save.
+const SESSION_KEY = 'mid_provider_cfg';
+
+let queue   = [];         // { id, name, type, file, status }
+let combined = '';        // final merged markdown
+let activeFormat = 'md';
+let selectedProvider = null;
+let configPending = false; // true = convert was triggered, waiting for config
+
+// ── On Load ───────────────────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  // Show session warning first
+  openModal('sessionModal');
+
+  // Restore saved config if remember was checked
+  try {
+    const saved = localStorage.getItem(SESSION_KEY);
+    if (saved) {
+      const cfg = JSON.parse(saved);
+      if (cfg.provider && cfg.key) {
+        sessionStorage.setItem(SESSION_KEY, saved);
+        applyProviderConfig(cfg.provider);
+        document.getElementById('configBtn').classList.add('configured');
+        document.getElementById('configDot').style.background = 'var(--green)';
+      }
+    }
+  } catch(e) { /* ignore */ }
+
+  // Clear localStorage key on tab close for security
+  window.addEventListener('beforeunload', () => {
+    const cfg = getStoredConfig();
+    if (cfg && !cfg.remember) {
+      sessionStorage.removeItem(SESSION_KEY);
+    }
+  });
+});
+
+// ── Session Modal ─────────────────────────────────────────────────────────────
+function closeSessionModal() {
+  closeModal('sessionModal');
+}
+
+// ── Modal Helpers ─────────────────────────────────────────────────────────────
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+// ── Config Modal ──────────────────────────────────────────────────────────────
+const PROVIDERS = {
+  anthropic: {
+    name: 'Anthropic',
+    placeholder: 'sk-ant-api03-...',
+    prefix: 'sk-ant',
+    guide: [
+      { step: 1, text: 'Go to', link: 'https://console.anthropic.com', label: 'console.anthropic.com' },
+      { step: 2, text: 'Sign in or create a free account.' },
+      { step: 3, text: 'Click <strong>API Keys</strong> in the left sidebar.' },
+      { step: 4, text: 'Click <strong>Create Key</strong>, give it a name, and copy the key.' },
+      { step: 5, text: '⚠ The key is shown only once. Save it securely.' }
+    ]
+  },
+  openai: {
+    name: 'OpenAI',
+    placeholder: 'sk-...',
+    prefix: 'sk-',
+    guide: [
+      { step: 1, text: 'Go to', link: 'https://platform.openai.com/api-keys', label: 'platform.openai.com/api-keys' },
+      { step: 2, text: 'Sign in to your OpenAI account.' },
+      { step: 3, text: 'Click <strong>Create new secret key</strong>.' },
+      { step: 4, text: 'Copy the key immediately — it is shown only once.' },
+      { step: 5, text: 'Make sure your account has available credits.' }
+    ]
+  },
+  gemini: {
+    name: 'Google Gemini',
+    placeholder: 'AIza...',
+    prefix: 'AIza',
+    guide: [
+      { step: 1, text: 'Go to', link: 'https://aistudio.google.com/app/apikey', label: 'aistudio.google.com/app/apikey' },
+      { step: 2, text: 'Sign in with your Google account.' },
+      { step: 3, text: 'Click <strong>Create API key</strong>.' },
+      { step: 4, text: 'Select or create a Google Cloud project.' },
+      { step: 5, text: 'Copy the generated key. Free tier available.' }
+    ]
+  }
+};
+
+function openConfig() {
+  // Restore current config into form
+  const cfg = getStoredConfig();
+  if (cfg) {
+    selectProvider(cfg.provider, false);
+    document.getElementById('keyInput').value = cfg.key;
+    if (cfg.remember) document.getElementById('rememberKey').checked = true;
+    validateKeyFormat();
+  }
+  openModal('configModal');
+}
+
+function closeConfig() {
+  if (configPending && !getStoredConfig()) {
+    toast('⚠ Select a provider to convert images', 'warn');
+  }
+  configPending = false;
+  closeModal('configModal');
+}
+
+function selectProvider(id, resetKey = true) {
+  selectedProvider = id;
+
+  // Update cards
+  document.querySelectorAll('.provider-card').forEach(c => c.classList.remove('selected'));
+  document.getElementById('pcard-' + id)?.classList.add('selected');
+
+  // Update key input
+  const p = PROVIDERS[id];
+  document.getElementById('keyLabel').textContent = p.name.toUpperCase() + ' API KEY';
+  document.getElementById('keyInput').placeholder = p.placeholder;
+  if (resetKey) document.getElementById('keyInput').value = '';
+  document.getElementById('keySection').classList.add('visible');
+  document.getElementById('keyValidation').textContent = '';
+
+  // Update guide
+  renderGuide(id);
+  validateKeyFormat();
+}
+
+function renderGuide(id) {
+  const steps = PROVIDERS[id].guide;
+  const body = document.getElementById('guideBody');
+  body.innerHTML = steps.map(s => `
+    <div class="guide-step">
+      <div class="step-num">${s.step}</div>
+      <div>
+        ${s.text}
+        ${s.link ? `<a href="${s.link}" target="_blank" rel="noopener noreferrer" class="guide-link">${s.label}</a>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function toggleGuide() {
+  const body = document.getElementById('guideBody');
+  const arrow = document.getElementById('guideArrow');
+  body.classList.toggle('open');
+  arrow.textContent = body.classList.contains('open') ? '▲' : '▼';
+}
+
+function toggleKeyVisibility() {
+  const input = document.getElementById('keyInput');
+  const btn   = document.getElementById('keyToggle');
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁';
+  }
+}
+
+function onKeyInput() {
+  validateKeyFormat();
+}
+
+function validateKeyFormat() {
+  if (!selectedProvider) return;
+  const key = document.getElementById('keyInput').value.trim();
+  const el  = document.getElementById('keyValidation');
+  const saveBtn = document.getElementById('saveConfigBtn');
+
+  if (!key) {
+    el.textContent = '';
+    saveBtn.disabled = true;
+    return;
+  }
+
+  const prefix = PROVIDERS[selectedProvider].prefix;
+  const valid  = key.startsWith(prefix) && key.length > 20;
+
+  if (valid) {
+    el.textContent = '✓ Key format looks valid';
+    el.className = 'key-validation kv-ok';
+    saveBtn.disabled = false;
+  } else {
+    el.textContent = `⚠ Key should start with "${prefix}"`;
+    el.className = 'key-validation kv-err';
+    saveBtn.disabled = true;
+  }
+}
+
+function onRememberChange() {
+  const checked = document.getElementById('rememberKey').checked;
+  if (checked) {
+    toast('⚠ Key will persist in localStorage on this device', 'warn');
+  }
+}
+
+function saveConfig() {
+  const key = document.getElementById('keyInput').value.trim();
+  const remember = document.getElementById('rememberKey').checked;
+
+  if (!selectedProvider || !key) {
+    toast('Select a provider and enter your key', 'err');
+    return;
+  }
+
+  const cfg = JSON.stringify({ provider: selectedProvider, key, remember });
+
+  // Always save to sessionStorage
+  sessionStorage.setItem(SESSION_KEY, cfg);
+
+  // Only persist to localStorage if user explicitly opts in
+  if (remember) {
+    localStorage.setItem(SESSION_KEY, cfg);
+  } else {
+    localStorage.removeItem(SESSION_KEY);
+  }
+
+  // Clear key from DOM immediately after save
+  document.getElementById('keyInput').value = '';
+  document.getElementById('keyInput').type = 'password';
+  document.getElementById('keyToggle').textContent = '👁';
+
+  applyProviderConfig(selectedProvider);
+  closeModal('configModal');
+  toast('✓ Provider configured', 'ok');
+
+  // If convert was waiting for config, resume
+  if (configPending) {
+    configPending = false;
+    startConvert();
+  }
+}
+
+function applyProviderConfig(provider) {
+  const btn  = document.getElementById('configBtn');
+  const dot  = document.getElementById('configDot');
+  const name = PROVIDERS[provider]?.name || provider;
+  btn.innerHTML = `<div class="dot" id="configDot" style="background:var(--green);box-shadow:0 0 4px var(--green)"></div>${name.toUpperCase()}`;
+  btn.classList.add('configured');
+}
+
+function getStoredConfig() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
+
+// ── File Input ────────────────────────────────────────────────────────────────
+const dropZone = document.getElementById('dropZone');
+
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  addFiles(Array.from(e.dataTransfer.files));
+});
+
+document.getElementById('fileInput').addEventListener('change', e => {
+  addFiles(Array.from(e.target.files));
+  e.target.value = '';
+});
+
+function addFiles(files) {
+  const MAX = 20 * 1024 * 1024; // 20MB
+  files.forEach(file => {
+    if (file.size > MAX) { toast(`⚠ ${file.name} exceeds 20MB limit`, 'warn'); return; }
+    const id = crypto.randomUUID();
+    queue.push({ id, name: file.name, type: getType(file), file, status: 'pending' });
+  });
+  renderQueue();
+}
+
+function getType(file) {
+  const n = file.name.toLowerCase();
+  if (n.endsWith('.pdf'))                         return 'pdf';
+  if (n.endsWith('.docx') || n.endsWith('.doc'))  return 'docx';
+  if (n.endsWith('.xlsx') || n.endsWith('.xls'))  return 'xlsx';
+  if (n.endsWith('.csv'))                         return 'csv';
+  if (/\.(jpg|jpeg|png|webp|gif)$/.test(n))       return 'image';
+  if (/\.(html|htm)$/.test(n))                    return 'html';
+  return 'text';
+}
+
+const TYPE_META = {
+  pdf:   { icon:'📄', cls:'q-icon-pdf',  label:'PDF' },
+  docx:  { icon:'📝', cls:'q-icon-docx', label:'DOCX' },
+  xlsx:  { icon:'📊', cls:'q-icon-xlsx', label:'XLSX' },
+  csv:   { icon:'📋', cls:'q-icon-xlsx', label:'CSV' },
+  image: { icon:'🖼', cls:'q-icon-img',  label:'IMAGE' },
+  html:  { icon:'🌐', cls:'q-icon-html', label:'HTML' },
+  text:  { icon:'📃', cls:'q-icon-txt',  label:'TEXT' },
+};
+
+function renderQueue() {
+  const list  = document.getElementById('queueList');
+  const empty = document.getElementById('queueEmpty');
+  document.getElementById('queueCount').textContent = queue.length;
+
+  if (queue.length === 0) {
+    list.innerHTML = '';
+    list.appendChild(empty);
+    empty.style.display = 'block';
+    return;
+  }
+
+  empty.style.display = 'none';
+  list.innerHTML = queue.map(item => {
+    const m = TYPE_META[item.type] || TYPE_META.text;
+    const sz = item.file ? fmtSize(item.file.size) : '';
+    const statusLabels = { pending:'PENDING', processing:'...', done:'DONE', error:'ERROR' };
+    return `
+      <div class="queue-item" id="qi-${item.id}">
+        <div class="q-icon ${m.cls}">${m.icon}</div>
+        <div class="q-info">
+          <div class="q-name" title="${item.name}">${item.name}</div>
+          <div class="q-meta">${m.label}${sz ? ' · ' + sz : ''}</div>
+        </div>
+        <div class="q-status qs-${item.status}">${statusLabels[item.status] || item.status.toUpperCase()}</div>
+      </div>`;
+  }).join('');
+}
+
+function setItemStatus(id, status) {
+  const el = document.querySelector(`#qi-${id} .q-status`);
+  if (!el) return;
+  const labels = { pending:'PENDING', processing:'...', done:'DONE', error:'ERROR' };
+  el.className = `q-status qs-${status}`;
+  el.textContent = labels[status] || status.toUpperCase();
+}
+
+function clearQueue() {
+  // Explicitly null file references to help GC
+  queue.forEach(q => { q.file = null; });
+  queue = [];
+  combined = '';
+  renderQueue();
+  showEmpty();
+}
+
+function fmtSize(b) {
+  if (!b) return '';
+  if (b < 1024) return b + 'B';
+  if (b < 1048576) return (b/1024).toFixed(1) + 'KB';
+  return (b/1048576).toFixed(1) + 'MB';
+}
+
+// ── Conversion ────────────────────────────────────────────────────────────────
+async function startConvert() {
+  if (queue.length === 0) { toast('Add files first', 'warn'); return; }
+
+  // Check if any images require AI — if so, validate config
+  const hasImages = queue.some(q => q.type === 'image' && q.status !== 'done');
+  if (hasImages && !getStoredConfig()) {
+    configPending = true;
+    openConfig();
+    return;
+  }
+
+  const btn = document.getElementById('convertBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Converting...';
+
+  const track = document.getElementById('progressTrack');
+  const fill  = document.getElementById('progressFill');
+  track.style.display = 'block';
+
+  const parts = [];
+  let done = 0;
+
+  for (const item of queue) {
+    if (item.status === 'done') { done++; continue; }
+    setItemStatus(item.id, 'processing');
+    try {
+      const md = await convertItem(item);
+      item.status = 'done';
+      parts.push(`<!-- FILE: ${item.name} -->\n\n${md}`);
+      // Clear file buffer from memory immediately after conversion
+      item.file = null;
+    } catch(err) {
+      item.status = 'error';
+      parts.push(`<!-- FILE: ${item.name} -->\n\n> ⚠ **Conversion error:** ${err.message}\n`);
+    }
+    done++;
+    fill.style.width = (done / queue.length * 100) + '%';
+    setItemStatus(item.id, item.status);
+    renderQueue();
+  }
+
+  combined = parts.join('\n\n---\n\n');
+
+  btn.disabled = false;
+  btn.innerHTML = 'Convert →';
+
+  showOutput();
+  toast(`✓ ${done} file(s) converted`, 'ok');
+}
+
+async function convertItem(item) {
+  switch(item.type) {
+    case 'pdf':   return convertPDF(item.file);
+    case 'docx':  return convertDOCX(item.file);
+    case 'xlsx':
+    case 'csv':   return convertXLSX(item.file);
+    case 'image': return convertImage(item.file);
+    case 'html':  return convertHTML(item.file);
+    case 'text':  return convertText(item.file);
+    default: throw new Error('Unsupported type: ' + item.type);
+  }
+}
+
+// ── PDF ───────────────────────────────────────────────────────────────────────
+async function convertPDF(file) {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let md = `# ${stripExt(file.name)}\n\n*PDF · ${pdf.numPages} page(s)*\n\n---\n\n`;
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page    = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const lines   = [];
+    let lastY     = null;
+    let line      = '';
+
+    for (const item of content.items) {
+      if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
+        if (line.trim()) lines.push(line.trim());
+        line = '';
+      }
+      line += item.str;
+      lastY = item.transform[5];
+    }
+    if (line.trim()) lines.push(line.trim());
+
+    if (pdf.numPages > 1) md += `## Page ${i}\n\n`;
+    md += lines.join('\n') + '\n\n';
+  }
+  return md;
+}
+
+// ── DOCX ──────────────────────────────────────────────────────────────────────
+async function convertDOCX(file) {
+  const buf    = await file.arrayBuffer();
+  const result = await mammoth.convertToHtml({ arrayBuffer: buf });
+  return htmlToMd(result.value, file.name);
+}
+
+// ── XLSX / CSV ────────────────────────────────────────────────────────────────
+async function convertXLSX(file) {
+  const buf = await file.arrayBuffer();
+  const wb  = XLSX.read(buf, { type: 'array' });
+  let md = `# ${stripExt(file.name)}\n\n`;
+
+  for (const sheet of wb.SheetNames) {
+    const ws   = wb.Sheets[sheet];
+    const data = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
+    if (!data || data.length === 0) continue;
+
+    md += `## ${sheet}\n\n`;
+    const maxCols = Math.max(...data.map(r => r.length));
+    const headers = data[0].map(h => String(h).trim() || ' ');
+
+    md += '| ' + headers.join(' | ') + ' |\n';
+    md += '| ' + headers.map(() => '---').join(' | ') + ' |\n';
+
+    const limit = Math.min(data.length, 501);
+    for (let i = 1; i < limit; i++) {
+      const cells = Array.from({ length: maxCols },
+        (_, j) => String(data[i][j] ?? '').replace(/\|/g, '\\|'));
+      md += '| ' + cells.join(' | ') + ' |\n';
+    }
+    if (data.length > 501) md += `\n*... ${data.length - 501} more rows truncated*\n`;
+    md += '\n';
+  }
+  return md;
+}
+
+// ── IMAGE (AI) ────────────────────────────────────────────────────────────────
+async function convertImage(file) {
+  const cfg = getStoredConfig();
+  if (!cfg) throw new Error('No AI provider configured. Click "AI PROVIDER" in the top bar.');
+
+  const b64  = await toBase64(file);
+  const mime = file.type || 'image/jpeg';
+
+  switch(cfg.provider) {
+    case 'anthropic': return imageViaAnthropic(b64, mime, file.name, cfg.key);
+    case 'openai':    return imageViaOpenAI(b64, mime, file.name, cfg.key);
+    case 'gemini':    return imageViaGemini(b64, mime, file.name, cfg.key);
+    default: throw new Error('Unknown provider: ' + cfg.provider);
+  }
+}
+
+const IMAGE_PROMPT = (filename) =>
+  `Convert the content of this image to well-structured Markdown.
+Rules:
+- Extract ALL visible text accurately
+- Preserve structure: headings, lists, tables, code blocks
+- If it contains a table, reproduce it as a Markdown table
+- Add a # heading at top using visible title or filename
+- Return ONLY the Markdown, no explanations
+Filename: ${filename}`;
+
+async function imageViaAnthropic(b64, mime, name, key) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-client-side-api-key-allow': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
+          { type: 'text', text: IMAGE_PROMPT(name) }
+        ]
+      }]
+    })
+  });
+  if (!res.ok) {
+    const e = await res.json();
+    throw new Error(e.error?.message || `Anthropic API error ${res.status}`);
+  }
+  const d = await res.json();
+  return d.content.map(c => c.text || '').join('');
+}
+
+async function imageViaOpenAI(b64, mime, name, key) {
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${key}`
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      max_tokens: 4096,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
+          { type: 'text', text: IMAGE_PROMPT(name) }
+        ]
+      }]
+    })
+  });
+  if (!res.ok) {
+    const e = await res.json();
+    throw new Error(e.error?.message || `OpenAI API error ${res.status}`);
+  }
+  const d = await res.json();
+  return d.choices?.[0]?.message?.content || '';
+}
+
+async function imageViaGemini(b64, mime, name, key) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: mime, data: b64 } },
+          { text: IMAGE_PROMPT(name) }
+        ]
+      }]
+    })
+  });
+  if (!res.ok) {
+    const e = await res.json();
+    throw new Error(e.error?.message || `Gemini API error ${res.status}`);
+  }
+  const d = await res.json();
+  return d.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+}
+
+// ── HTML ──────────────────────────────────────────────────────────────────────
+async function convertHTML(file) {
+  return htmlToMd(await file.text(), file.name);
+}
+
+async function convertText(file) {
+  return `# ${stripExt(file.name)}\n\n${await file.text()}`;
+}
+
+// ── HTML → Markdown parser ────────────────────────────────────────────────────
+function htmlToMd(html, filename) {
+  const doc   = new DOMParser().parseFromString(html, 'text/html');
+  const title = doc.querySelector('title')?.textContent?.trim() || stripExt(filename);
+
+  function walk(node) {
+    if (node.nodeType === 3) return node.textContent;
+    if (node.nodeType !== 1) return '';
+    const tag = node.tagName.toLowerCase();
+    const ch  = Array.from(node.childNodes).map(walk).join('');
+
+    switch(tag) {
+      case 'script': case 'style': case 'noscript':
+      case 'nav': case 'footer': case 'aside': return '';
+      case 'h1': return `\n# ${ch.trim()}\n\n`;
+      case 'h2': return `\n## ${ch.trim()}\n\n`;
+      case 'h3': return `\n### ${ch.trim()}\n\n`;
+      case 'h4': return `\n#### ${ch.trim()}\n\n`;
+      case 'p':  return `\n${ch.trim()}\n\n`;
+      case 'br': return '\n';
+      case 'strong': case 'b': return `**${ch}**`;
+      case 'em': case 'i': return `*${ch}*`;
+      case 'code': return `\`${ch}\``;
+      case 'pre':  return `\n\`\`\`\n${node.textContent.trim()}\n\`\`\`\n\n`;
+      case 'a': {
+        const href = node.getAttribute('href') || '';
+        return href ? `[${ch}](${href})` : ch;
+      }
+      case 'img': {
+        const src = node.getAttribute('src') || '';
+        const alt = node.getAttribute('alt') || 'image';
+        return `![${alt}](${src})`;
+      }
+      case 'ul': {
+        const items = Array.from(node.querySelectorAll(':scope > li'));
+        return '\n' + items.map(li => `- ${walk(li).trim()}`).join('\n') + '\n\n';
+      }
+      case 'ol': {
+        const items = Array.from(node.querySelectorAll(':scope > li'));
+        return '\n' + items.map((li,i) => `${i+1}. ${walk(li).trim()}`).join('\n') + '\n\n';
+      }
+      case 'blockquote': return `\n> ${ch.trim().replace(/\n/g,'\n> ')}\n\n`;
+      case 'hr': return '\n---\n\n';
+      case 'table': return walkTable(node);
+      default: return ch;
+    }
+  }
+
+  function walkTable(table) {
+    let md = '\n';
+    const rows = Array.from(table.querySelectorAll('tr'));
+    rows.forEach((row, ri) => {
+      const cells = Array.from(row.querySelectorAll('th,td'));
+      md += '| ' + cells.map(c => c.textContent.trim().replace(/\|/g,'\\|')).join(' | ') + ' |\n';
+      if (ri === 0) md += '| ' + cells.map(() => '---').join(' | ') + ' |\n';
+    });
+    return md + '\n';
+  }
+
+  const body = doc.querySelector('body') || doc.documentElement;
+  return (`# ${title}\n\n` + walk(body)).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// ── Output ────────────────────────────────────────────────────────────────────
+function showOutput() {
+  document.getElementById('outputEmpty').style.display = 'none';
+  document.getElementById('mdOutput').style.display    = 'block';
+  document.getElementById('mdOutput').textContent      = combined;
+  document.getElementById('copyBtn').disabled     = false;
+  document.getElementById('downloadBtn').disabled = false;
+}
+
+function showEmpty() {
+  document.getElementById('outputEmpty').style.display = 'flex';
+  document.getElementById('mdOutput').style.display    = 'none';
+  document.getElementById('mdOutput').textContent      = '';
+  document.getElementById('copyBtn').disabled     = true;
+  document.getElementById('downloadBtn').disabled = true;
+  combined = '';
+}
+
+function setFormat(fmt) {
+  activeFormat = fmt;
+  document.querySelectorAll('.fmt-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('fmt-' + fmt).classList.add('active');
+}
+
+function getOutput() {
+  if (!combined) return '';
+  switch(activeFormat) {
+    case 'txt':  return combined.replace(/[#*`_~]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+    case 'html': return mdToHtml(combined);
+    default:     return combined;
+  }
+}
+
+function copyOutput() {
+  const out = getOutput();
+  if (!out) { toast('Nothing to copy', 'warn'); return; }
+  navigator.clipboard.writeText(out)
+    .then(() => toast('✓ Copied to clipboard', 'ok'))
+    .catch(() => toast('Copy failed — try selecting manually', 'err'));
+}
+
+function downloadOutput() {
+  const out  = getOutput();
+  if (!out) { toast('Nothing to download', 'warn'); return; }
+  const exts = { md:'md', txt:'txt', html:'html' };
+  const mime = { md:'text/markdown', txt:'text/plain', html:'text/html' };
+  const name = 'markitdown-output.' + (exts[activeFormat] || 'md');
+  const blob = new Blob([out], { type: mime[activeFormat] || 'text/markdown' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`✓ Downloaded ${name}`, 'ok');
+}
+
+// ── Minimal MD → HTML for export ─────────────────────────────────────────────
+function mdToHtml(md) {
+  const escaped = md
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let html = escaped
+    .replace(/```[\w]*\n([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+    .replace(/^###### (.+)$/gm,'<h6>$1</h6>')
+    .replace(/^##### (.+)$/gm,'<h5>$1</h5>')
+    .replace(/^#### (.+)$/gm,'<h4>$1</h4>')
+    .replace(/^### (.+)$/gm,'<h3>$1</h3>')
+    .replace(/^## (.+)$/gm,'<h2>$1</h2>')
+    .replace(/^# (.+)$/gm,'<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2">$1</a>')
+    .replace(/^&gt; (.+)$/gm,'<blockquote>$1</blockquote>')
+    .replace(/^---$/gm,'<hr>')
+    .replace(/\n\n/g,'</p><p>');
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>body{font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.7}
+h1,h2,h3{margin:24px 0 12px}table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #ddd;padding:8px 12px}th{background:#f5f5f5}
+code{background:#f0f0f0;padding:2px 6px;border-radius:3px}
+pre{background:#f0f0f0;padding:16px;border-radius:4px;overflow-x:auto}
+blockquote{border-left:3px solid #ddd;padding-left:14px;color:#666}</style>
+</head><body><p>${html}</p></body></html>`;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function stripExt(name) { return name.replace(/\.[^.]+$/, ''); }
+
+function toBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload  = () => res(r.result.split(',')[1]);
+    r.onerror = () => rej(new Error('Failed to read file'));
+    r.readAsDataURL(file);
+  });
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+let toastTimer;
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast show t-${type}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+</script>
+</body>
+</html>
