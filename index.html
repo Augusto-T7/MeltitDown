@@ -1286,8 +1286,8 @@ const PROVIDERS = {
   },
   gemini: {
     name: 'Google Gemini',
-    placeholder: 'AIza...',
-    prefix: 'AIza',
+    placeholder: 'AIza... or AQ...',
+    prefix: 'AQ',
     guide: [
       { step: 1, text: 'Go to', link: 'https://aistudio.google.com/app/apikey', label: 'aistudio.google.com/app/apikey' },
       { step: 2, text: 'Sign in with your Google account.' },
@@ -1387,8 +1387,14 @@ function validateKeyFormat() {
     return;
   }
 
-  const prefix = PROVIDERS[selectedProvider].prefix;
-  const valid  = key.startsWith(prefix) && key.length > 20;
+  let prefix = PROVIDERS[selectedProvider].prefix;
+  // Gemini supports legacy AIza... and new AQ... format (June 2026+)
+  let valid = false;
+  if (selectedProvider === 'gemini') {
+    valid = (key.startsWith('AIza') || key.startsWith('AQ')) && key.length > 20;
+  } else {
+    valid = key.startsWith(prefix) && key.length > 20;
+  }
 
   if (valid) {
     el.textContent = '✓ Key format looks valid';
